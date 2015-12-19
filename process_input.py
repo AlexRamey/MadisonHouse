@@ -9,6 +9,9 @@ from hopcroftkarp import HopcroftKarp
 from read_input import Student, Teacher, readInStudentsFile, readInTeachersFile
 from sys import maxsize
 from math import floor
+import itertools
+
+global g_best_solution
 
 global g_students
 global g_teachers
@@ -16,6 +19,8 @@ global g_assignments
 global g_assigned_cars
 global g_unassigned_riders
 global g_unassigned_cars
+global g_MAX_RESTRICTION
+global g_MAX_RESTRICTION_V2 # for the rerun, we may require a different degree of flexibility
 
 """
 A car is identified by its driver. It has a capacity, list of riders, number
@@ -48,7 +53,7 @@ class Car:
 
     def __eq__(self, other):
         if isinstance(other, Car):
-            return (self.car_id == other.other_id)
+            return (self.car_id == other.car_id)
         else:
             return False
 
@@ -67,7 +72,7 @@ inflexible cars that may be harder to match in the next phase.
 If no compatible cars exist, we iterate through all riders and see if swapping this rider with any given
 rider would restrict a car less. If so, we swap these two riders. If not, we add the rider to the no-ride set.
 """
-def create_cars(students, MAX_RESTRICTION = 5):
+def create_cars(students, MAX_RESTRICTION = 5, redistribute = True):
     global g_unassigned_riders
 
     eagles = []
@@ -81,7 +86,7 @@ def create_cars(students, MAX_RESTRICTION = 5):
             drivers.append(s)
         else:
             riders.append(s)
-    print("Eagles: " + str(len(eagles)) + ", Drivers: " + str(len(drivers)) + ", Riders: " + str(len(riders)))
+    #print("Eagles: " + str(len(eagles)) + ", Drivers: " + str(len(drivers)) + ", Riders: " + str(len(riders)))
 
     cars = []
     for d in drivers:
@@ -92,6 +97,7 @@ def create_cars(students, MAX_RESTRICTION = 5):
     unassigned_riders = []
     assigned_riders = []
 
+    # Order rider in ascending order based on # of time_slots
     riders.sort(key=lambda x: len(x.time_slot_ids), reverse=False)
 
     for r in riders:
@@ -108,12 +114,28 @@ def create_cars(students, MAX_RESTRICTION = 5):
             best_car.add_rider(r)
             assigned_riders.append(r)
         else:
-            #TODO See if there's a better way to handle this
             unassigned_riders.append(r)
 
-    print("Number of Unassigned Riders: " + str(len(unassigned_riders)))
-    print("Unassigned Riders: " + str(unassigned_riders))
+    #print("Number of Unassigned Riders: " + str(len(unassigned_riders)))
+    #print("Unassigned Riders: " + str(unassigned_riders))
     #print(cars)
+    if redistribute == True:
+        # try to get each rider into a car
+        successful_assignments = []
+        for rider in unassigned_riders:
+            result = reshuffle_cars(cars, [rider,])
+            if result[1] == True:
+                successful_assignments.append(rider)
+                cars = result[0]
+
+        unassigned_riders = set(unassigned_riders).difference_update(set(successful_assignments))
+        if unassigned_riders == None:
+            unassigned_riders = []
+        else:
+            unassigned_riders = list(unassigned_riders)
+
+        #print("Successful Assignments: " + str(successful_assignments))
+        #print("Unassigned Riders: " + str(unassigned_riders))
 
     # Track the unassigned riders
     g_unassigned_riders = unassigned_riders
@@ -137,6 +159,146 @@ def compute_restriction(car, student, MAX_RESTRICTION):
         return maxsize
     else:
         return restriction
+
+"""
+Given the set of cars and some unassigned rider, we wish to iteratively
+dump and re-add riders to try to arrive at some stable set of cars that
+accomodates this new rider. If a satisfactory solution cannot be found,
+we return the same set of cars that we passed in. Otherwise, we return the
+new set of cars. The return value is a tuple (car_set, BOOL) where BOOL indicates
+if we were successful in adding this new rider.
+"""
+def reshuffle_cars(cars, riders):
+    # copy the input to return in the case of failure
+    mutable_cars = list(cars)
+
+    # used to keep number of iterations reasonable before declaring failure
+    loop_guard = 0
+
+    # iteratively reshuffle the riders around the cars
+    while (len(riders) > 0 and loop_guard < 100):
+        loop_guard += 1
+        assigned_riders = []
+        newly_dumped_riders = []
+        for r in riders:
+            best_car = None
+            best_dump_result = None
+            for c in mutable_cars:
+                result = compute_dump_count(r, c)
+                if (result[0] != maxsize):
+                    if (best_dump_result == None) or (result[0] < best_dump_result[0]):
+                        best_car = c
+                        best_dump_result = result
+            if (best_car != None):
+                for rider in best_car.riders:
+                    if rider not in best_dump_result[1]:
+                        newly_dumped_riders.append(rider) # kick out riders who aren't in the optimal subset by adding them to 'riders'
+                # rebuild the car
+                best_car.riders = []
+                best_car.time_slot_ids = set(best_car.driver.time_slot_ids)
+                best_car.num_seats_left = best_car.capacity
+                for rider in best_dump_result[1]:
+                    best_car.add_rider(rider)
+                best_car.add_rider(r)
+                assigned_riders.append(r)
+        for r in assigned_riders:
+            riders.remove(r)
+        for r in newly_dumped_riders:
+            riders.append(r)
+
+    if len(riders) > 0:
+        return (cars, False)
+    else:
+        return (mutable_cars, True)
+
+"""
+Given a rider and a car, compute the # of car_members
+that would have to be kicked out to make the car compatible with
+this new rider. If it's impossible (i.e. the driver isn't compatible
+with this candidate rider), then return (maxsize, None). Else,
+return (dump_count, optimal_set_of_riders_to_keep)
+"""
+def compute_dump_count(rider, car):
+    common_times = set(rider.time_slot_ids).intersection(car.time_slot_ids)
+
+    if (len(common_times) == 0) or (car.capacity == 0):
+        return (maxsize,None)         # impossible to add rider to this car
+
+    else:
+        riders = list(car.riders)
+        if (len(riders) == 0):      # this car is empty, so no one has be kicked out
+            return (0, [])
+
+        if car.num_seats_left == 0:
+            # we must evict at least one rider
+            combo_size_cap = len(riders)
+        else:
+            # we may not need to evict anyone
+            combo_size_cap = len(riders) + 1
+
+        optimal_subset = []
+        for L in range(0, combo_size_cap):
+            for subset in itertools.combinations(riders, L):
+                new_time_slot_ids = set(common_times)
+                for rider in subset:
+                    new_time_slot_ids.intersection_update(set(rider.time_slot_ids))
+                    if (len(new_time_slot_ids) > 0) and (len(subset) > len(optimal_subset)):
+                        optimal_subset = subset
+
+        # return (num_of_current_riders that we need to kick out, set of riders we want to keep)
+        return ((car.capacity - car.num_seats_left) - len(optimal_subset), optimal_subset)
+
+"""
+This function's purpose is to take in a set of cars, spread
+the riders across the cars as evenly as possible, and return
+the result. The motivation for this function is the realization
+that smaller cars are easier to match with work than larger cars.
+
+This function works by trying to move riders from more full cars to
+less full cars. It considers flexibilities as well, and finishes when
+it can find no more favorable moves.
+"""
+def normalize_cars(cars, fuller_cars, count_to_deflate):
+    ret_val = fuller_cars
+    # split up the cars into two sets
+    less_full_cars_with_extra_seat = []
+    for c in cars:
+        if (c.total_workers() <= count_to_deflate-2) and (c.num_seats_left > 0):
+            less_full_cars_with_extra_seat.append(c)
+
+    # try to move riders to less full cars
+    for fc in fuller_cars:
+        removed_riders = []
+        for r in fc.riders:
+            best_car = None
+            lowest_restriction = maxsize
+            for ec in less_full_cars_with_extra_seat:
+                restriction = compute_restriction(ec,r,g_MAX_RESTRICTION)
+                if restriction <= lowest_restriction and restriction != maxsize:
+                    if (not ((restriction == lowest_restriction) and (best_car.total_workers() <= ec.total_workers()))):
+                        lowest_restriction = restriction
+                        best_car = ec
+            if best_car != None:
+                best_car.add_rider(r)
+                #print("Moved 1 Down!")
+                if best_car.total_workers() > (fc.total_workers()  - 2):
+                    less_full_cars_with_extra_seat.remove(best_car)
+                removed_riders.append(r)
+
+        # Now remove the riders from the fuller car that got reassigned . . .
+        if (len(removed_riders) > 0):
+            ret_val.remove(fc)
+            current_riders = fc.riders
+            fc.num_seats_left = fc.capacity
+            fc.riders = []
+            fc.time_slot_ids = set(fc.driver.time_slot_ids)
+            for r in current_riders:
+                if (r not in removed_riders):
+                    fc.add_rider(r)
+
+    return ret_val
+
+
 
 """
 A School is fundamentally a set of Teachers. A school has an id,
@@ -251,8 +413,11 @@ def run_matching(cars, schools, size):
         else:
             assigned_cars.append(c)
 
-    #print("Car_Size: " + str(size))
-    #print("Unassigned Cars:" + str(len(unassigned_cars)))
+    # try to push the unassigned cars down into lower rounds
+    unassigned_cars = normalize_cars(cars, unassigned_cars, size)
+
+    # print("Car_Size: " + str(size))
+    # print("Unassigned Cars:" + str(len(unassigned_cars)))
     # print(str(unassigned_cars))
     #if (size == 3):
        # print("Assigned Cars:" + str(len(assigned_cars)))
@@ -297,7 +462,7 @@ def create_schools_and_iterate_through_car_sizes(cars, teachers):
     for i in range(biggest_car,0,-1):
         run_matching(cars, schools, i)
 
-    """
+
     # Experimentally run algorithm from scratch with remainder
     remaining_students = []
     remaining_students += g_unassigned_riders
@@ -309,7 +474,7 @@ def create_schools_and_iterate_through_car_sizes(cars, teachers):
     g_unassigned_cars = []
     g_unassigned_riders = []
 
-    cars = create_cars(remaining_students, 1)
+    cars = create_cars(remaining_students, g_MAX_RESTRICTION_V2, False)
 
     # determine biggest car size
     biggest_car = 0
@@ -323,7 +488,29 @@ def create_schools_and_iterate_through_car_sizes(cars, teachers):
         run_matching(cars, schools, i)
 
     #END Experimental
-    """
+
+"""
+The purpose of this function is to verify that the result is feasible.
+This includes checking the following:
+
+1. Every car has enough seats for its workers.
+2. Every student can work when they are assigned to work
+"""
+def verify_feasibility_of_solution():
+    # g_best_solution = (g_assignments, g_assigned_cars, g_unassigned_cars, g_unassigned_riders, count + len(g_unassigned_riders))
+    for car in g_best_solution[1]:
+        if (len(car.riders) > car.capacity):
+            return "NOT FEASIBLE"
+        school_assignment = g_best_solution[0][car.car_id]
+        time_slot = int(school_assignment[school_assignment.rfind('_') + 1 : school_assignment.rfind('*')])
+        for r in car.riders:
+            if time_slot not in r.time_slot_ids:
+                return "NOT FEASIBLE"
+            if time_slot not in car.driver.time_slot_ids:
+                return "NOT FEASIBLE"
+
+
+    return "Feasibility Verified!"
 
 if __name__ == '__main__':
     global g_students
@@ -331,25 +518,41 @@ if __name__ == '__main__':
     global g_assignments
     global g_assigned_cars
     global g_unassigned_cars
-    g_assignments = {}
-    g_unassigned_cars = []
-    g_assigned_cars = []
-    g_students = readInStudentsFile()
-    g_teachers = readInTeachersFile()
-    create_schools_and_iterate_through_car_sizes(create_cars(g_students), g_teachers)
-    print("# Unassigned Riders: " + str(len(g_unassigned_riders)))
-    print("# Unassigned Cars: " + str(len(g_unassigned_cars)))
-    count = 0
-    for c in g_unassigned_cars:
-        count += c.total_workers()
-    print("# Unassigned Workers: " + str(count))
-    print("# Assigned Cars: " + str(len(g_assignments)))
-    count = 0
-    for c in g_assigned_cars:
-        count += c.total_workers()
-    print("# Assigned Workers: " + str(count))
-    print("Assignments: " + str(g_assignments))
-    print("Cars: " + str(g_assigned_cars))
+    global g_MAX_RESTRICTION
+    global g_MAX_RESTRICTION_V2
+    global g_best_solution
+    g_best_solution = None
+    for i in range(0,9):
+        for j in range(0,20):
+            g_assignments = {}
+            g_unassigned_cars = []
+            g_assigned_cars = []
+            g_students = readInStudentsFile()
+            g_teachers = readInTeachersFile()
+            g_MAX_RESTRICTION = 4 + int(i/3)    # try flexibility values 4,5,6
+            g_MAX_RESTRICTION_V2 = 7 + (i%3)    # with re-run values 7,8,9
+            create_schools_and_iterate_through_car_sizes(create_cars(g_students, g_MAX_RESTRICTION), g_teachers)
+            #print("# Unassigned Riders: " + str(len(g_unassigned_riders)))
+            #print("# Unassigned Cars: " + str(len(g_unassigned_cars)))
+            count = 0
+            for c in g_assigned_cars:
+                count += c.total_workers()
+            #print("# Assigned Workers: " + str(count))
+            count = 0
+            for c in g_unassigned_cars:
+                count += c.total_workers()
+            #print("# Unassigned Workers: " + str(count))
+            #print("# Assigned Cars: " + str(len(g_assignments)))
+            #print("Assignments: " + str(g_assignments))
+            #print("Cars: " + str(g_assigned_cars))
+            if (g_best_solution == None) or ((count + len(g_unassigned_riders)) < g_best_solution[4]):
+                g_best_solution = (g_assignments, g_assigned_cars, g_unassigned_cars, g_unassigned_riders, count + len(g_unassigned_riders))
+    print(g_best_solution[0])
+    print(g_best_solution[1])
+    print(g_best_solution[2])
+    print(g_best_solution[3])
+    print(g_best_solution[4])
+    print(verify_feasibility_of_solution())
 
 """
 -----------------------------------Unused Code Below This Point------------------------------------------------

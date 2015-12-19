@@ -9,7 +9,7 @@ from hopcroftkarp import HopcroftKarp
 from read_input import Student, Teacher, readInStudentsFile, readInTeachersFile
 from sys import maxsize
 from math import floor
-import itertools
+import itertools, copy
 
 global g_best_solution
 
@@ -170,7 +170,7 @@ if we were successful in adding this new rider.
 """
 def reshuffle_cars(cars, riders):
     # copy the input to return in the case of failure
-    mutable_cars = list(cars)
+    mutable_cars = copy.deepcopy(cars)
 
     # used to keep number of iterations reasonable before declaring failure
     loop_guard = 0

@@ -19,8 +19,8 @@ class Student:
         self.time_slot_ids = time_slot_ids
 
     def __repr__(self):
-        #return self.student_id
-        return self.student_id + " " + str(self.time_slot_ids)
+        return self.student_id
+        #return self.student_id + " " + str(self.time_slot_ids)
 
     def __eq__(self, other):
         if isinstance(other, Student):
@@ -37,6 +37,9 @@ class Teacher:
         self.teacher_school = teacher_school.strip()
         self.teacher_id = self.teacher_school + self.teacher_name
         self.time_slot_ids = time_slot_ids
+        self.num_helpers = 0
+        self.room_number = 500
+        self.assigned_time_slot_ids = []
 
     def __repr__(self):
         return self.teacher_id
@@ -78,9 +81,9 @@ def readInTeachersFile():
 
 def generateListOfTimeIntervalIDs(monday_list, tuesday_list, wednesday_list, thursday_list, friday_list, is_thirty_min_intervals):
     """ Parse weekday availabilities and return one long list with unique time_slot_ids.
-        time_slot_ids indicate one-hour availability chunks and range from 1 - 239,
+        time_slot_ids indicate one-hour availability chunks and range from 0 - 238,
         where 1 represents 12am - 1am Monday morning, 2 represents 12:30am - 1:30am
-        Monday morning . . . 239 represents 11pm-midnight on Friday """
+        Monday morning . . . 238 represents 11pm-midnight on Friday """
 
     monday_times = monday_list.split(',')
     tuesday_times = tuesday_list.split(',')

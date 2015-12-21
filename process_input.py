@@ -9,7 +9,7 @@ from hopcroftkarp import HopcroftKarp
 from read_input import Student, Teacher, readInStudentsFile, readInTeachersFile
 from sys import maxsize
 from math import floor
-import itertools, copy
+import itertools, copy, xlsxwriter, random
 
 global g_best_solution
 
@@ -19,6 +19,7 @@ global g_assignments
 global g_assigned_cars
 global g_unassigned_riders
 global g_unassigned_cars
+global g_schools_final_state
 global g_MAX_RESTRICTION
 global g_MAX_RESTRICTION_V2 # for the rerun, we may require a different degree of flexibility
 
@@ -315,6 +316,8 @@ class School:
 
     def compute_work(self):
         work = {}
+        # for now, a teacher may only be assigned a single helper . . .
+        # TODO: increment work by # of students teacher could use at this time
         for t in self.teachers:
             for time in t.time_slot_ids:
                 if time not in work:
@@ -439,17 +442,9 @@ for all car sizes, starting at the biggest, and working our way down to 1.
 def create_schools_and_iterate_through_car_sizes(cars, teachers):
     global g_unassigned_cars
     global g_unassigned_riders
+    global g_schools_final_state
 
-    teacher_sets = {}
-    for t in teachers:
-        if t.teacher_school in teacher_sets:
-            teacher_sets[t.teacher_school].append(t)
-        else:
-            teacher_sets[t.teacher_school] = [t,]
-
-    schools = []
-    for school in teacher_sets:
-        schools.append(School(school, teacher_sets[school]))
+    schools = create_schools(teachers)
 
     # determine biggest car size
     biggest_car = 0
@@ -489,6 +484,29 @@ def create_schools_and_iterate_through_car_sizes(cars, teachers):
 
     #END Experimental
 
+    g_schools_final_state = schools
+
+"""
+Given set of teachers, return list of schools
+"""
+def create_schools(teachers = None):
+    if teachers == None:
+        return None
+
+    teacher_sets = {}
+    for t in teachers:
+        if t.teacher_school in teacher_sets:
+            teacher_sets[t.teacher_school].append(t)
+        else:
+            teacher_sets[t.teacher_school] = [t,]
+
+    schools = []
+    for school in teacher_sets:
+        schools.append(School(school, teacher_sets[school]))
+
+    return schools
+
+
 """
 The purpose of this function is to verify that the result is feasible.
 This includes checking the following:
@@ -498,19 +516,224 @@ This includes checking the following:
 """
 def verify_feasibility_of_solution():
     # g_best_solution = (g_assignments, g_assigned_cars, g_unassigned_cars, g_unassigned_riders, count + len(g_unassigned_riders))
+    schools = create_schools(g_teachers)
     for car in g_best_solution[1]:
+        # check to see that car can carry all its passengers
         if (len(car.riders) > car.capacity):
             return "NOT FEASIBLE"
         school_assignment = g_best_solution[0][car.car_id]
+        school_id = school_assignment[:school_assignment.rfind('_')]
         time_slot = int(school_assignment[school_assignment.rfind('_') + 1 : school_assignment.rfind('*')])
+        # check to see that there's a job for all of these workers
+        for s in schools:
+            if (s.school_id == school_id):
+                s.work[time_slot] = s.work[time_slot] - car.total_workers()
+                if s.work[time_slot] < 0:
+                    return "NOT FEASIBLE"
+        # check to see that all the members of a car can work when they're assigned to
         for r in car.riders:
             if time_slot not in r.time_slot_ids:
                 return "NOT FEASIBLE"
             if time_slot not in car.driver.time_slot_ids:
                 return "NOT FEASIBLE"
-
-
+    # passed all checks
     return "Feasibility Verified!"
+
+def write_results_to_excel_workbook():
+    workbook = xlsxwriter.Workbook('Schedule.xlsx')
+    bold = workbook.add_format({'bold': True})
+
+    teacher_assignments = create_teacher_assignments(g_best_solution[0], g_best_solution[1])
+    cars = g_best_solution[1]
+
+    students_worksheet = workbook.add_worksheet('Assignments')
+    cols = ['student_id', 'car_id', 'start_time', 'school_id', 'teacher_id', 'teacher_room']
+    for i,val in enumerate(cols):
+        students_worksheet.write(0,i,val, bold)
+    row_counter = 1
+    for c in cars:
+        school_assignment = g_best_solution[0][c.car_id]
+        school_id = school_assignment[:school_assignment.rfind('_')]
+        time_slot = int(school_assignment[school_assignment.rfind('_') + 1 : school_assignment.rfind('*')])
+        workers = [c.driver,] + c.riders
+        for w in workers:
+            values = [w.student_id, c.car_id, extract_readable_start_time(time_slot), school_id, teacher_assignments[w.student_id].teacher_id, teacher_assignments[w.student_id].room_number]
+            for i,val in enumerate(values):
+                students_worksheet.write(row_counter,i,val)
+            row_counter += 1
+
+    cars_worksheet = workbook.add_worksheet('Cars')
+    cols = ['driver_id', 'riders', 'start_time', 'school', 'seats_remaining']
+    for i,val in enumerate(cols):
+        cars_worksheet.write(0,i,val,bold)
+    row_counter = 1
+    for c in cars:
+        school_assignment = g_best_solution[0][c.car_id]
+        school_id = school_assignment[:school_assignment.rfind('_')]
+        time_slot = int(school_assignment[school_assignment.rfind('_') + 1 : school_assignment.rfind('*')])
+        values = [c.car_id,str(c.riders),extract_readable_start_time(time_slot), school_id, c.num_seats_left]
+        for i,val in enumerate(values):
+            cars_worksheet.write(row_counter,i,val)
+        row_counter += 1
+
+    teachers_worksheet = workbook.add_worksheet('Teachers Assigned')
+    cols = ['teacher_id', 'start_time', 'student_id(s)']
+    for i,val in enumerate(cols):
+        teachers_worksheet.write(0,i,val,bold)
+    row_counter = 1
+
+    teacher_helpers = {}    # map teachers to dictionaries of {time_slot : helpers}
+    for student_id in teacher_assignments:
+        t = teacher_assignments[student_id]
+        if t not in teacher_helpers:
+            teacher_helpers[t] = {}
+
+        # find what time this student works
+        car = None
+        for c in cars:
+            if c.driver.student_id == student_id:
+                car = c
+            else:
+                for s in c.riders:
+                    if s.student_id == student_id:
+                        car = c
+                        break
+            if car != None:
+                break
+        school_assignment = g_best_solution[0][car.car_id]
+        time_slot = int(school_assignment[school_assignment.rfind('_') + 1 : school_assignment.rfind('*')])
+        if time_slot in teacher_helpers[t]:
+            teacher_helpers[t][time_slot].append(student_id)
+        else:
+            teacher_helpers[t][time_slot] = [student_id, ]
+
+    for t in teacher_helpers:
+        for time_slot in teacher_helpers[t]:
+            values = [t.teacher_id, extract_readable_start_time(time_slot), str(teacher_helpers[t][time_slot])]
+            for i,val in enumerate(values):
+                teachers_worksheet.write(row_counter, i, val)
+            row_counter += 1
+
+    unassigned_worksheet = workbook.add_worksheet('Unassigned_Workers')
+    cols = ['student_id', 'is_driver', 'work_times']
+    for i,val in enumerate(cols):
+        unassigned_worksheet.write(0,i,val,bold)
+    row_counter = 1
+
+    unassigned_workers = []
+    for c in g_best_solution[2]:
+        unassigned_workers.append(c.driver)
+        unassigned_workers += c.riders
+    unassigned_workers += g_best_solution[3]
+
+    for w in unassigned_workers:
+        readable_time_slots = []
+        for time_slot in w.time_slot_ids:
+            readable_time_slots.append(extract_readable_start_time(time_slot))
+        values = [w.student_id, w.is_driver, str(readable_time_slots)]
+        for i,val in enumerate(values):
+            unassigned_worksheet.write(row_counter,i,val)
+        row_counter += 1
+
+    available_work_worksheet = workbook.add_worksheet('Unassigned_Work')
+    cols = ['school_id', 'start_time', 'num_positions']
+    for i,val in enumerate(cols):
+        available_work_worksheet.write(0,i,val,bold)
+    row_counter = 1
+
+    for school in g_schools_final_state:
+        for time in school.work:
+            if school.work[time] > 0:
+                available_work_worksheet.write(row_counter, 0, school.school_id)
+                available_work_worksheet.write(row_counter, 1, extract_readable_start_time(time))
+                available_work_worksheet.write(row_counter, 2, str(school.work[time]))
+                row_counter += 1
+
+    available_slots_worksheet = workbook.add_worksheet('Unassigned_Teacher_Slots')
+    cols = ['teacher_id', 'school_id', 'num_helpers_assigned', 'unassigned_slots']
+    for i,val in enumerate(cols):
+        available_slots_worksheet.write(0,i,val,bold)
+    row_counter = 1
+
+
+    for t in g_teachers:
+        all_time_slots = list(t.time_slot_ids)
+        if t in teacher_helpers:
+            for time_slot in teacher_helpers[t]:
+                all_time_slots.remove(time_slot) #we assume one helper for now TODO: update this . . .
+        readable_remaining_time_slots = []
+        for time_slot in all_time_slots:
+            readable_remaining_time_slots.append(extract_readable_start_time(time_slot))
+        values = [t.teacher_id, t.teacher_school, t.num_helpers, str(readable_remaining_time_slots)]
+        for i,val in enumerate(values):
+            available_slots_worksheet.write(row_counter, i, val)
+        row_counter += 1
+
+    workbook.close()
+
+    return None
+
+"""
+Given a dictionary mapping cars to schools at specific times,
+and a list of all assigned cars, return a dictionary mapping students to teachers
+"""
+def create_teacher_assignments(car_assignments, cars):
+    ret_val = {}
+    for c in cars:
+        school_assignment = car_assignments[c.car_id]
+        school_id = school_assignment[:school_assignment.rfind('_')]
+        time_slot = int(school_assignment[school_assignment.rfind('_') + 1 : school_assignment.rfind('*')])
+        school = None
+        for s in g_schools_final_state:
+            if s.school_id == school_id:
+                school = s
+                break
+        # first shuffle the teachers, then sort into ascending order based on num_helpers
+        # this makes teachers with least help get considered first and makes it random in case
+        # there's a tie
+        random.shuffle(school.teachers)
+        workers = [c.driver,] + c.riders
+        for w in workers:
+            school.teachers.sort(key=lambda x: x.num_helpers, reverse=False)
+            for t in school.teachers:
+                # TODO: support a teacher being allowed to have multiple helpers at a given time
+                if time_slot in t.time_slot_ids and time_slot not in t.assigned_time_slot_ids:
+                    ret_val[w.student_id] = t
+                    t.num_helpers = t.num_helpers + 1
+                    t.assigned_time_slot_ids.append(time_slot)
+                    break
+
+    return ret_val
+
+def extract_readable_start_time(time_slot):
+    days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
+    day_index = int(time_slot/48)
+    hour = (time_slot%48) # time_slot could be 0 through 238
+    token_one = days[day_index]
+
+    token_two = ''
+    hr_output = 0
+    if hour > 23:
+        hour_output = int((hour - 24) / 2)
+    else:
+        hour_output = int(hour/2)
+    if (hour_output == 0):
+        hour_output = 12
+    token_two = str(hour_output)
+
+    token_three = ''
+    if (hour%2) == 0:
+        token_three = ':00'
+    else:
+        token_three = ':30'
+
+    token_four = ''
+    if hour > 23:
+        token_four = 'p.m.'
+    else:
+        token_four = 'a.m.'
+
+    return token_one + ' ' + token_two + token_three + token_four
 
 if __name__ == '__main__':
     global g_students
@@ -523,7 +746,7 @@ if __name__ == '__main__':
     global g_best_solution
     g_best_solution = None
     for i in range(0,9):
-        for j in range(0,20):
+        for j in range(0,10):
             g_assignments = {}
             g_unassigned_cars = []
             g_assigned_cars = []
@@ -547,12 +770,8 @@ if __name__ == '__main__':
             #print("Cars: " + str(g_assigned_cars))
             if (g_best_solution == None) or ((count + len(g_unassigned_riders)) < g_best_solution[4]):
                 g_best_solution = (g_assignments, g_assigned_cars, g_unassigned_cars, g_unassigned_riders, count + len(g_unassigned_riders))
-    print(g_best_solution[0])
-    print(g_best_solution[1])
-    print(g_best_solution[2])
-    print(g_best_solution[3])
-    print(g_best_solution[4])
     print(verify_feasibility_of_solution())
+    write_results_to_excel_workbook()
 
 """
 -----------------------------------Unused Code Below This Point------------------------------------------------

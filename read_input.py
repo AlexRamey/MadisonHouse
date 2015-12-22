@@ -7,16 +7,23 @@
 
 import csv
 
+g_students_csv = 'STUDENTS_NewFormat.csv'
+g_teachers_csv = 'TEACHERS_NewFormat.csv'
+
 class Student:
-    def __init__(self, student_id, is_returner, school_preference, teacher_preference, time_slot_ids, is_driver, num_seats):
+    def __init__(self, student_id, first_name, last_name,
+                 major, year, phone_number, is_driver, num_passenger_seats,
+                 is_returner, preference, time_slot_ids):
         self.student_id = student_id.strip()
-        self.is_returner = is_returner
-        self.num_seats = num_seats
+        self.name = first_name.strip() + " " + last_name.strip()
+        self.major = major.strip()
+        self.year = str(year).strip()
+        self.phone_number = str(phone_number).strip()
         self.is_driver = is_driver
-        # TODO: We need unique school and teacher_ids
-        self.school_preference = school_preference.strip()
-        self.teacher_preference = teacher_preference.strip()
-        self.time_slot_ids = time_slot_ids
+        self.num_passenger_seats = int(num_passenger_seats)
+        self.is_returner = is_returner
+        self.preference = preference.strip()
+        self.time_slot_ids = set(time_slot_ids)
 
     def __repr__(self):
         return self.student_id
@@ -27,64 +34,69 @@ class Student:
             return (self.student_id == other.student_id)
         else:
             return False
+
     def __hash__(self):
         return hash(self.student_id)
 
 class Teacher:
-    def __init__ (self, teacher_name, teacher_school, time_slot_ids):
-        self.teacher_name = teacher_name.strip()
-        # TODO: We need unique school and teacher_ids
-        self.teacher_school = teacher_school.strip()
-        self.teacher_id = self.teacher_school + self.teacher_name
+    def __init__ (self, teacher_email, first_name, last_name,
+                  school_id, room_number, grade_level, subjects,
+                  max_num_helpers_at_once, max_num_helpers_per_week,
+                  special_message, time_slot_ids):
+        self.email = teacher_email.strip()
+        self.name = first_name.strip() + " " + last_name.strip()
+        self.teacher_school = school_id.strip()
+        self.room_number = str(room_number).strip()
+        self.grade_level = str(grade_level).strip()
+        self.subjects = subjects.strip()
+        self.max_num_helpers_at_once = int(max_num_helpers_at_once)
+        self.max_num_helpers_per_week = int(max_num_helpers_per_week)
+        self.special_message = special_message.strip()
         self.time_slot_ids = time_slot_ids
-        self.num_helpers = 0
-        self.room_number = 500
+
+        # used to track teacher assignments
+        self.num_assigned_helpers = 0
         self.assigned_time_slot_ids = []
 
     def __repr__(self):
-        return self.teacher_id
-        #return self.teacher_id + " " + str(self.time_slot_ids)
+        return self.email
+        #return self.email + " " + str(self.time_slot_ids)
 
     def __eq__(self, other):
         if isinstance(other, Teacher):
-            return (self.teacher_id == other.teacher_id)
+            return (self.email == other.email)
         else:
             return False
 
     def __hash__(self):
-        return hash(self.teacher_id)
+        return hash(self.email)
 
 def readInStudentsFile():
     students = []
-    with open('STUDENTS.csv', newline = '') as csvfile:
+    with open(g_students_csv, newline = '') as csvfile:
         reader = csv.reader(csvfile)
         for row in reader:
-            is_driver = (row[3] == 'Yes')
-            num_seats = int(row[4])
-            is_returner = (row[10] == 'Yes')
-            school_preference = row[11]
-            teacher_preference = row[12]
-            time_slot_ids = generateListOfTimeIntervalIDs(row[5], row[6], row[7], row[8], row[9], True)
-            students.append(Student(row[1], is_returner, school_preference, teacher_preference, time_slot_ids, is_driver, num_seats))
+            time_slot_ids = generateListOfTimeIntervalIDs(row[10], row[11], row[12], row[13], row[14], True)
+            students.append(Student(row[0], row[1], row[2], row[3], row[4], row[5], (row[6]=='Yes'), row[7], (row[8] == 'YES'), row[9], time_slot_ids))
     return list(set(students))
 
 def readInTeachersFile():
     teachers = []
-    with open('TEACHERS.csv', newline = '') as csvfile:
+    with open(g_teachers_csv, newline = '') as csvfile:
         reader = csv.reader(csvfile)
         for row in reader:
-            teacher_name = row[1]
-            teacher_school = row[3]
-            time_slot_ids = generateListOfTimeIntervalIDs(row[7],row[8],row[9],row[10],row[11], False)
-            teachers.append(Teacher(teacher_name, teacher_school, time_slot_ids))
+            time_slot_ids = generateListOfTimeIntervalIDs(row[10],row[11],row[12],row[13],row[14], False)
+            teachers.append(Teacher(row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], row[8], row[9], time_slot_ids))
     return list(set(teachers))
 
-def generateListOfTimeIntervalIDs(monday_list, tuesday_list, wednesday_list, thursday_list, friday_list, is_thirty_min_intervals):
-    """ Parse weekday availabilities and return one long list with unique time_slot_ids.
-        time_slot_ids indicate one-hour availability chunks and range from 0 - 238,
-        where 1 represents 12am - 1am Monday morning, 2 represents 12:30am - 1:30am
-        Monday morning . . . 238 represents 11pm-midnight on Friday """
 
+"""
+Parse weekday availabilities and return one long list of unique interger time_slot_ids.
+time_slot_ids indicate one-hour availability chunks and range from 0 - 239,
+where 0 represents 12am - 1am Monday morning, 2 represents 12:30am - 1:30am
+Monday morning . . . 239 represents 11:30pm (on Friday) - 12:30 a.m. Saturday
+"""
+def generateListOfTimeIntervalIDs(monday_list, tuesday_list, wednesday_list, thursday_list, friday_list, is_thirty_min_intervals):
     monday_times = monday_list.split(',')
     tuesday_times = tuesday_list.split(',')
     wednesday_times = wednesday_list.split(',')
@@ -105,15 +117,21 @@ def generateListOfTimeIntervalIDs(monday_list, tuesday_list, wednesday_list, thu
         else:
             # Teacher Time Intervals
             for interval in interval_lists[i]:
-                # guard against case of empty string i.e. no intervals for some weekday
-                if (interval != ''):
+                if (interval.strip() != ''):
                     interval_components = interval.split('-')
+                    # a trick to make get_slot_id() work for a single hour long interval
+                    # instead of two half hours ones
                     reverse_interval = interval_components[1] + '-' + interval_components[0]
-                    # This is guaranteed to succeed and return time_slot_id for start of interval
                     time_interval_ids.append(offset + get_slot_id(interval, reverse_interval))
 
     return time_interval_ids
 
+"""
+Given two intervals (assumed to be 30 minutes long), we check that the second
+interval begins when the first one ends. If the input is valid and this is the
+case, then we only focus on the start of the first interval, and translate this
+start_time into an integer in the range 1-239. Returns -1 on failure.
+"""
 def get_slot_id(interval1, interval2):
     interval1Times = interval1.split('-')
     interval2Times = interval2.split('-')
@@ -121,7 +139,6 @@ def get_slot_id(interval1, interval2):
     if (len(interval1Times) != 2 or len(interval2Times) != 2 or interval1Times[1].strip() != interval2Times[0].strip()):
         return -1
     else:
-        # we have an hour-long block
         slot_id = 0
         if ('pm' in interval1Times[0]):
             slot_id += 24
@@ -138,16 +155,3 @@ if __name__ == '__main__':
     print(students)
     teachers = readInTeachersFile()
     print(teachers)
-
-    #test for duplicates . . .
-    dups = []
-    for x in range(0, len(students)):
-        for i in range(x+1, len(students)):
-            if students[x].student_id == students[i].student_id and students[x].student_id not in dups:
-                dups.append(students[x].student_id)
-    for x in range(0, len(teachers)):
-        for i in range(x+1, len(teachers)):
-            if teachers[x].teacher_id == teachers[i].teacher_id and teachers[x].teacher_id not in dups:
-                dups.append(teachers[x].teacher_id)
-
-    print(dups)

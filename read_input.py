@@ -7,8 +7,8 @@
 
 import csv
 
-g_students_csv = 'STUDENTS_NewFormat.csv'
-g_teachers_csv = 'TEACHERS_NewFormat.csv'
+g_students_csv = 'STUDENTS.csv'
+g_teachers_csv = 'TEACHERS.csv'
 
 class Student:
     def __init__(self, student_id, first_name, last_name,
@@ -22,7 +22,7 @@ class Student:
         self.is_driver = is_driver
         self.num_passenger_seats = int(num_passenger_seats)
         self.is_returner = is_returner
-        self.preference = preference.strip()
+        self.school_preference = preference.strip()
         self.time_slot_ids = set(time_slot_ids)
         self.car_assignment = None
         self.time_assignment = None

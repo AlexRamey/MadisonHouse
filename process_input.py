@@ -634,7 +634,7 @@ def write_results_to_excel_workbook():
     cars = g_best_solution[1]
 
     students_worksheet = workbook.add_worksheet('Assignments')
-    cols = ['student_id', 'car_id', 'start_time', 'school_id', 'teacher_email', 'teacher_room']
+    cols = ['student_id', 'car_id', 'start_time', 'school_id', 'teacher_email', 'teacher_name', 'subject(s)', 'grade_level', 'teacher_room', 'teacher_msg']
     for i,val in enumerate(cols):
         students_worksheet.write(0,i,val, bold)
     row_counter = 1
@@ -644,13 +644,13 @@ def write_results_to_excel_workbook():
         time_slot = int(school_assignment[school_assignment.rfind('_') + 1 : school_assignment.rfind('*')])
         workers = [c.driver,] + c.riders
         for w in workers:
-            values = [w.student_id, c.car_id, extract_readable_start_time(time_slot), school_id, g_best_solution[5][w].email, g_best_solution[5][w].room_number]
+            values = [w.student_id, c.car_id, extract_readable_start_time(time_slot), school_id, g_best_solution[5][w].email, g_best_solution[5][w].name, g_best_solution[5][w].subjects, g_best_solution[5][w].grade_level, g_best_solution[5][w].room_number, g_best_solution[5][w].special_message]
             for i,val in enumerate(values):
                 students_worksheet.write(row_counter,i,val)
             row_counter += 1
 
-    cars_worksheet = workbook.add_worksheet('Cars')
-    cols = ['driver_id', 'riders', 'start_time', 'school', 'seats_remaining']
+    cars_worksheet = workbook.add_worksheet('Cars Assigned')
+    cols = ['driver_id', 'driver_name', 'driver_phone', 'riders', 'start_time', 'school', 'seats_remaining']
     for i,val in enumerate(cols):
         cars_worksheet.write(0,i,val,bold)
     row_counter = 1
@@ -658,13 +658,13 @@ def write_results_to_excel_workbook():
         school_assignment = g_best_solution[0][c.car_id]
         school_id = school_assignment[:school_assignment.rfind('_')]
         time_slot = int(school_assignment[school_assignment.rfind('_') + 1 : school_assignment.rfind('*')])
-        values = [c.car_id,str(c.riders),extract_readable_start_time(time_slot), school_id, c.num_seats_left]
+        values = [c.car_id, c.driver.name, c.driver.phone_number, str(c.riders),extract_readable_start_time(time_slot), school_id, c.num_seats_left]
         for i,val in enumerate(values):
             cars_worksheet.write(row_counter,i,val)
         row_counter += 1
 
     teachers_worksheet = workbook.add_worksheet('Teachers Assigned')
-    cols = ['teacher_email', 'start_time', 'student_id(s)']
+    cols = ['teacher_email', 'start_time', 'helpers [id_name_major_year_phone_number, . . .]']
     for i,val in enumerate(cols):
         teachers_worksheet.write(0,i,val,bold)
     row_counter = 1
@@ -678,18 +678,21 @@ def write_results_to_excel_workbook():
         # find what time this student works
         time_slot = worker.time_assignment
         if time_slot in teacher_helpers[t]:
-            teacher_helpers[t][time_slot].append(worker.student_id)
+            teacher_helpers[t][time_slot].append(worker)
         else:
-            teacher_helpers[t][time_slot] = [worker.student_id, ]
+            teacher_helpers[t][time_slot] = [worker, ]
 
     for t in teacher_helpers:
         for time_slot in teacher_helpers[t]:
-            values = [t.email, extract_readable_start_time(time_slot), str(teacher_helpers[t][time_slot])]
+            helper_info = []
+            for w in teacher_helpers[t][time_slot]:
+                helper_info.append(w.student_id + "_" + w.name + "_" + w.major + "_" + w.year + "_" + w.phone_number)
+            values = [t.email, extract_readable_start_time(time_slot), str(helper_info)]
             for i,val in enumerate(values):
                 teachers_worksheet.write(row_counter, i, val)
             row_counter += 1
 
-    unassigned_worksheet = workbook.add_worksheet('Unassigned_Workers')
+    unassigned_worksheet = workbook.add_worksheet('Unassigned Workers')
     cols = ['student_id', 'is_driver', 'work_times']
     for i,val in enumerate(cols):
         unassigned_worksheet.write(0,i,val,bold)
@@ -710,7 +713,7 @@ def write_results_to_excel_workbook():
             unassigned_worksheet.write(row_counter,i,val)
         row_counter += 1
 
-    available_work_worksheet = workbook.add_worksheet('Unassigned_Work')
+    available_work_worksheet = workbook.add_worksheet('Unassigned Work')
     cols = ['school_id', 'start_time', 'num_positions']
     for i,val in enumerate(cols):
         available_work_worksheet.write(0,i,val,bold)
@@ -724,7 +727,7 @@ def write_results_to_excel_workbook():
                 available_work_worksheet.write(row_counter, 2, str(school.work[time]))
                 row_counter += 1
 
-    available_slots_worksheet = workbook.add_worksheet('Unassigned_Teacher_Slots')
+    available_slots_worksheet = workbook.add_worksheet('Unassigned Teacher Slots')
     cols = ['teacher_email', 'school_id', 'num_helpers_assigned', 'max_num_helpers_per_week', 'max_num_helpers_at_once' 'unassigned_slots [slot*capacity_for_this_slot, . . .]']
     for i,val in enumerate(cols):
         available_slots_worksheet.write(0,i,val,bold)

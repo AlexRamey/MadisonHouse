@@ -151,9 +151,10 @@ def get_slot_id(interval1, interval2):
         if (int((start_hour_min[1])[0:2]) == 30):
             slot_id += 1
         return slot_id
-
+"""
 if __name__ == '__main__':
     students = readInStudentsFile()
     print(students)
     teachers = readInTeachersFile()
     print(teachers)
+"""

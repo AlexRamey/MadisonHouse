@@ -14,7 +14,7 @@ class Student:
     def __init__(self, student_id, first_name, last_name,
                  major, year, phone_number, is_driver, num_passenger_seats,
                  is_returner, preference, time_slot_ids):
-        self.student_id = student_id.strip()
+        self.student_id = student_id.strip().replace('_','')
         self.name = first_name.strip() + " " + last_name.strip()
         self.major = major.strip()
         self.year = str(year).strip()
@@ -24,6 +24,8 @@ class Student:
         self.is_returner = is_returner
         self.preference = preference.strip()
         self.time_slot_ids = set(time_slot_ids)
+        self.car_assignment = None
+        self.time_assignment = None
 
     def __repr__(self):
         return self.student_id
@@ -49,14 +51,14 @@ class Teacher:
         self.room_number = str(room_number).strip()
         self.grade_level = str(grade_level).strip()
         self.subjects = subjects.strip()
-        self.max_num_helpers_at_once = int(max_num_helpers_at_once)
         self.max_num_helpers_per_week = int(max_num_helpers_per_week)
+        self.max_num_helpers_at_once = min(int(max_num_helpers_at_once), self.max_num_helpers_per_week)
         self.special_message = special_message.strip()
-        self.time_slot_ids = time_slot_ids
+        self.time_slot_ids = set(time_slot_ids)
 
         # used to track teacher assignments
-        self.num_assigned_helpers = 0
-        self.assigned_time_slot_ids = []
+        self.num_helpers_assigned = 0
+        self.assigned_time_slot_ids = {}    # a dictionary mapping time_slots to num_helpers_assigned
 
     def __repr__(self):
         return self.email

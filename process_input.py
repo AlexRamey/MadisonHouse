@@ -9,13 +9,12 @@ from hopcroftkarp import HopcroftKarp
 from read_input import Student, Teacher, readInStudentsFile, readInTeachersFile
 from sys import maxsize
 from math import floor
-import itertools, copy, xlsxwriter, random
+import itertools, copy, xlsxwriter
 
 global g_best_solution
 
 global g_students
 global g_teachers
-global g_original_teachers
 global g_assignments
 global g_assigned_cars
 global g_unassigned_riders
@@ -350,6 +349,7 @@ class School:
     """
     def assign_car_to_work_slot(self, car, time):
         global g_teacher_assignments
+        global g_assignments
         eligible_teachers = {}      # map teachers to num_helper_supported at this time
         for teacher in self.teachers:
             num_helpers_supported = self.compute_time_slot_capacity(teacher,time)
@@ -365,7 +365,7 @@ class School:
             return False        # not enough positions to support this car
 
         # else, there are enough positions to support this car
-
+        g_assignments[car.car_id] = self.school_id + "_" + str(time) + "*"
         for w in workers:
             list_of_eligible_teachers = []
             for teacher in eligible_teachers:
@@ -433,7 +433,6 @@ run HopcroftKarp to determine maximal matching between cars and school
 work-blocks.
 """
 def run_matching(cars, schools, size):
-    global g_assignments
     global g_assigned_cars
     global g_unassigned_cars
 
@@ -498,7 +497,6 @@ def run_matching(cars, schools, size):
             is_assignment_successful = school.assign_car_to_work_slot(c, time_slot)
             if (is_assignment_successful):
                 g_assigned_cars.append(c)
-                g_assignments[c.car_id] = school_block
             else:
                 unassigned_cars.append(c)
 
@@ -594,33 +592,185 @@ def create_schools(teachers = None):
     return schools
 
 """
+This function massages g_best solution to accomodate returner school_preferences
+if possible. It works as follows:
+
+For all returners with a valid preference:
+    if their car is going to their school preference, Done.
+
+    else, if they are a driver, see if their school preference can accomodate their car
+        if so, re-route the car.
+        if not, say too bad (potential to swap cars around)
+
+    otherwise they are a rider. Scan all cars going to their school preference
+        Scan all riders in these cars. If a swap can be made that doesn't pull a
+        returner away from their preference, make the swap.
+"""
+def accomodate_preferences():
+    schools = {}
+    for school in g_schools_final_state:
+        schools[school.school_id] = school
+    returners_with_preference = []
+    for student in g_teacher_assignments:
+        if ((student.is_returner == True) and (student.school_preference in schools)):
+            returners_with_preference.append(student)
+
+    # print("Number of preferences: " + str(len(returners_with_preference)))
+    loop_guard = True
+    while (loop_guard == True):
+        loop_guard = False
+        for returner in returners_with_preference:
+            preferred_school = schools[returner.school_preference]
+            assigned_school = schools[g_teacher_assignments[returner].teacher_school]
+            returner_car = None
+            for car in g_assigned_cars:
+                if ((returner in car.riders) or (returner == car.driver)):
+                    returner_car = car
+                    break
+
+            if (assigned_school == preferred_school):
+                continue
+
+            is_only_returner_in_car = True
+            for rider in returner_car.riders:
+                if ((rider in returners_with_preference) and (rider != returner)):
+                    is_only_returner_in_car = False
+            if ((returner_car.driver in returners_with_preference) and (returner_car.driver != returner)):
+                is_only_returner_in_car = False
+
+            was_swapped = False
+            if returner.is_driver == False: # rider
+                for car in g_assigned_cars:
+                    school_assignment = g_assignments[car.car_id]
+                    school_id = school_assignment[:school_assignment.rfind('_')]
+                    time_slot = int(school_assignment[school_assignment.rfind('_') + 1 : school_assignment.rfind('*')])
+                    car_school = schools[school_id]
+                    if ((car_school == preferred_school) and (time_slot in returner.time_slot_ids)):
+                        candidate_rider = None
+                        for rider in car.riders:
+                            if ((returner.time_assignment in rider.time_slot_ids) and
+                                    (not ((rider in returners_with_preference) and (car_school == schools[rider.school_preference])))):
+                                candidate_rider = rider
+                                break
+                        if (candidate_rider != None):
+                            #print("Swapping " + returner.student_id + ":" + candidate_rider.student_id)
+                            was_swapped = True
+                            loop_guard = True
+                            swap_riders(returner_car, returner, car, candidate_rider)
+                            break
+
+            # we will attempt to reroute a car if the returner is the driver or if the returner wasn't already swapped
+            # and they are the only worker in the car that is a returner
+            if ((returner.is_driver == True) or ((was_swapped == False) and (is_only_returner_in_car == True))):
+                work_times = preferred_school.compute_work_slots(returner_car.total_workers(), returner_car.time_slot_ids)
+                if len(work_times) > 0:
+                    #print("Rerouting: " + returner.student_id)
+                    loop_guard = True
+                    workers = returner_car.riders + [returner_car.driver,]
+                    for w in workers:
+                        teacher = g_teacher_assignments[w]
+                        teacher.num_helpers_assigned -= 1
+                        teacher.assigned_time_slot_ids[w.time_assignment] -= 1
+                        if teacher.assigned_time_slot_ids[w.time_assignment] == 0:
+                            del teacher.assigned_time_slot_ids[w.time_assignment]
+                        schools[teacher.teacher_school].work = schools[teacher.teacher_school].compute_work()
+                    best_time = None
+                    for t in work_times:
+                        if ((best_time == None) or (work_times[t] > work_times[best_time])):
+                            best_time = t
+                    preferred_school.assign_car_to_work_slot(returner_car, best_time)
+
+"""
+This function swaps two riders between two cars. It is assumed that the
+input is valid. It updates all necessary data structures in globals to reflect
+the swap.
+"""
+def swap_riders(car_one, car_one_rider, car_two, car_two_rider):
+    # update rider time/car assignments
+    car_two_rider.car_assignment = car_one
+    car_two_rider.time_assignment = car_one.driver.time_assignment
+    car_one_rider.car_assignment = car_two
+    car_one_rider.time_assignment = car_two.driver.time_assignment
+    # update g_teacher_assignments
+    temp = g_teacher_assignments[car_one_rider]
+    g_teacher_assignments[car_one_rider] = g_teacher_assignments[car_two_rider]
+    g_teacher_assignments[car_two_rider] = temp
+    # update g_assigned_cars
+    swap_in_rider(car_one, car_one_rider, car_two_rider)
+    swap_in_rider(car_two, car_two_rider, car_one_rider)
+
+"""
+Helper function. Swaps in the new_rider for the old_rider.
+"""
+def swap_in_rider(car, old_rider, new_rider):
+    car_riders = list(car.riders)
+    car_riders.remove(old_rider)
+    car_riders.append(new_rider)
+    car.riders = []
+    car.time_slot_ids = set(car.driver.time_slot_ids)
+    car.num_seats_left = car.capacity - 1
+    for p in car_riders:
+        car.add_rider(p)
+
+
+"""
+The purpose of this function is to print out the fraction
+of returner preferences we were able to satisfy.
+"""
+def output_preferences_info():
+    schools = {}
+    for school in g_best_solution[6]:
+        schools[school.school_id] = school
+    returners_with_preference = []
+    for student in g_best_solution[5]:
+        if ((student.is_returner == True) and (student.school_preference in schools)):
+            returners_with_preference.append(student)
+
+    count = 0
+    for returner in returners_with_preference:
+        preferred_school = schools[returner.school_preference]
+        assigned_school = schools[g_best_solution[5][returner].teacher_school]
+        if (assigned_school == preferred_school):
+            count += 1
+    print("Satisifed " + str(count) + "/" + str(len(returners_with_preference)) + " preferences.")
+
+"""
 The purpose of this function is to verify that the result is feasible.
 This includes checking the following:
 
 1. Every car has enough seats for its workers.
 2. Every student can work when they are assigned to work
-3. The schools can support the worker they've been assigned
+3. The schools can support the workers they've been assigned
 """
 def verify_feasibility_of_solution():
-    schools = create_schools(g_original_teachers)
     for car in g_best_solution[1]:
         # check to see that car can carry all its passengers
         if (len(car.riders) > (car.capacity - 1)):
             return "NOT FEASIBLE - car is too full!"
-        school_assignment = g_best_solution[0][car.car_id]
-        school_id = school_assignment[:school_assignment.rfind('_')]
-        time_slot = int(school_assignment[school_assignment.rfind('_') + 1 : school_assignment.rfind('*')])
-        # check to see that there's a job for all of these workers
-        for s in schools:
-            if (s.school_id == school_id):
-                if not s.assign_car_to_work_slot(car, time_slot):
-                    return "NOT FEASIBLE - school cannot support work assignment!"
         # check to see that all the members of a car can work when they're assigned to
+        school_assignment = g_best_solution[0][car.car_id]
+        time_slot = int(school_assignment[school_assignment.rfind('_') + 1 : school_assignment.rfind('*')])
         for r in car.riders:
             if time_slot not in r.time_slot_ids:
                 return "NOT FEASIBLE - rider cannot work then"
-            if time_slot not in car.driver.time_slot_ids:
-                return "NOT FEASIBLE - driver cannot work then"
+        if time_slot not in car.driver.time_slot_ids:
+            return "NOT FEASIBLE - driver cannot work then"
+        workers = car.riders + [car.driver,]
+        for w in workers:
+            teacher = g_best_solution[5][w]
+            if (teacher.num_helpers_assigned > teacher.max_num_helpers_per_week):
+                return "NOT FEASIBLE - too many helpers per week for a teacher!"
+            for key in teacher.assigned_time_slot_ids:
+                num_overlapping_workers = teacher.assigned_time_slot_ids[key]
+                if (((key - 1) in teacher.assigned_time_slot_ids) and ((key + 1) not in teacher.assigned_time_slot_ids)):
+                    num_overlapping_workers += teacher.assigned_time_slot_ids[key-1]
+                elif (((key + 1) in teacher.assigned_time_slot_ids) and ((key - 1) not in teacher.assigned_time_slot_ids)):
+                    num_overlapping_workers += teacher.assigned_time_slot_ids[key + 1]
+                elif (((key - 1) in teacher.assigned_time_slot_ids) and ((key + 1) in teacher.assigned_time_slot_ids)):
+                    num_overlapping_workers += max(teacher.assigned_time_slot_ids[key-1], teacher.assigned_time_slot_ids[key+1])
+                if (num_overlapping_workers > teacher.max_num_helpers_at_once):
+                    return "NOT FEASIBLE - too many overlapping helpers for a teacher!"
+
     # passed all checks
     return "Feasibility Verified!"
 
@@ -664,7 +814,7 @@ def write_results_to_excel_workbook():
         row_counter += 1
 
     teachers_worksheet = workbook.add_worksheet('Teachers Assigned')
-    cols = ['teacher_email', 'start_time', 'helpers [id_name_major_year_phone_number, . . .]']
+    cols = ['teacher_email', 'school_id', 'start_time', 'helpers [id_name_major_year_phone_number, . . .]']
     for i,val in enumerate(cols):
         teachers_worksheet.write(0,i,val,bold)
     row_counter = 1
@@ -687,13 +837,13 @@ def write_results_to_excel_workbook():
             helper_info = []
             for w in teacher_helpers[t][time_slot]:
                 helper_info.append(w.student_id + "_" + w.name + "_" + w.major + "_" + w.year + "_" + w.phone_number)
-            values = [t.email, extract_readable_start_time(time_slot), str(helper_info)]
+            values = [t.email, t.teacher_school, extract_readable_start_time(time_slot), str(helper_info)]
             for i,val in enumerate(values):
                 teachers_worksheet.write(row_counter, i, val)
             row_counter += 1
 
     unassigned_worksheet = workbook.add_worksheet('Unassigned Workers')
-    cols = ['student_id', 'is_driver', 'work_times']
+    cols = ['student_id', 'name', 'is_returner', 'preference', 'is_driver', 'work_times']
     for i,val in enumerate(cols):
         unassigned_worksheet.write(0,i,val,bold)
     row_counter = 1
@@ -708,7 +858,7 @@ def write_results_to_excel_workbook():
         readable_time_slots = []
         for time_slot in w.time_slot_ids:
             readable_time_slots.append(extract_readable_start_time(time_slot))
-        values = [w.student_id, w.is_driver, str(readable_time_slots)]
+        values = [w.student_id, w.name, w.is_returner, str(w.school_preference), w.is_driver, str(readable_time_slots)]
         for i,val in enumerate(values):
             unassigned_worksheet.write(row_counter,i,val)
         row_counter += 1
@@ -728,7 +878,7 @@ def write_results_to_excel_workbook():
                 row_counter += 1
 
     available_slots_worksheet = workbook.add_worksheet('Unassigned Teacher Slots')
-    cols = ['teacher_email', 'school_id', 'num_helpers_assigned', 'max_num_helpers_per_week', 'max_num_helpers_at_once' 'unassigned_slots [slot*capacity_for_this_slot, . . .]']
+    cols = ['teacher_email', 'school_id', 'num_helpers_assigned', 'max_num_helpers_per_week', 'max_num_helpers_at_once', 'unassigned_slots [slot*capacity_for_this_slot, . . .]']
     for i,val in enumerate(cols):
         available_slots_worksheet.write(0,i,val,bold)
     row_counter = 1
@@ -787,7 +937,6 @@ def extract_readable_start_time(time_slot):
 if __name__ == '__main__':
     global g_students
     global g_teachers
-    global g_original_teachers
     global g_assignments
     global g_assigned_cars
     global g_unassigned_cars
@@ -797,7 +946,6 @@ if __name__ == '__main__':
     global g_best_solution
     g_best_solution = None
     # looping was here
-    g_original_teachers = None
     for i in range(10,21):
         for j in range(1,6):
             for k in range(0,5):
@@ -807,8 +955,6 @@ if __name__ == '__main__':
                 g_assigned_cars = []
                 g_students = readInStudentsFile()
                 g_teachers = readInTeachersFile()
-                if g_original_teachers == None:
-                    g_original_teachers = copy.deepcopy(g_teachers)
                 g_max_restriction = i
                 g_max_restriction_2 = j
                 create_schools_and_iterate_through_car_sizes(create_cars(g_students, g_max_restriction), g_teachers)
@@ -826,7 +972,9 @@ if __name__ == '__main__':
                 #print("Assignments: " + str(g_assignments))
                 #print("Cars: " + str(g_assigned_cars))
                 if (g_best_solution == None) or ((count + len(g_unassigned_riders)) < g_best_solution[4]):
+                    accomodate_preferences()
                     g_best_solution = (copy.deepcopy(g_assignments), copy.deepcopy(g_assigned_cars), copy.deepcopy(g_unassigned_cars), copy.deepcopy(g_unassigned_riders), count + len(g_unassigned_riders), copy.deepcopy(g_teacher_assignments), copy.deepcopy(g_schools_final_state), copy.deepcopy(g_teachers))
                     #print(str(i) + "," + str(j) + "," + str(count + len(g_unassigned_riders)))
+    output_preferences_info()
     print(verify_feasibility_of_solution())
     write_results_to_excel_workbook()

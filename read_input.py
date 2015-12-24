@@ -79,7 +79,7 @@ def readInStudentsFile():
         reader = csv.reader(csvfile)
         for row in reader:
             time_slot_ids = generateListOfTimeIntervalIDs(row[10], row[11], row[12], row[13], row[14], True)
-            students.append(Student(row[0], row[1], row[2], row[3], row[4], row[5], (row[6]=='Yes'), row[7], (row[8] == 'YES'), row[9], time_slot_ids))
+            students.append(Student(row[0], row[1], row[2], row[3], row[4], row[5], (row[6]=='Yes'), row[7], (row[8] == 'Yes'), row[9], time_slot_ids))
     return list(set(students))
 
 def readInTeachersFile():
